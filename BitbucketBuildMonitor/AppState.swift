@@ -46,16 +46,16 @@ class AppState: ObservableObject {
         }
     }
 
-    func saveCredentials(username: String, appPassword: String) {
-        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPassword = appPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+    func saveCredentials(email: String, apiToken: String) {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard !trimmedUsername.isEmpty, !trimmedPassword.isEmpty else {
-            errorMessage = "Username and app password are required."
+        guard !trimmedEmail.isEmpty, !trimmedToken.isEmpty else {
+            errorMessage = "Email and API token are required."
             return
         }
 
-        let newCredentials = Credentials(username: trimmedUsername, appPassword: trimmedPassword)
+        let newCredentials = Credentials(email: trimmedEmail, apiToken: trimmedToken)
         do {
             try keychainService.saveCredentials(newCredentials)
             self.credentials = newCredentials
@@ -120,6 +120,55 @@ class AppState: ObservableObject {
         monitoredRepos.removeAll { $0.id == repo.id }
         saveMonitoredReposToUserDefaults()
         print("AppState: Removed repository \(repo.compositeSlug).")
+    }
+
+    func addRepositories(_ repositories: [(workspace: String, repoSlug: String)]) {
+        var addedCount = 0
+        var duplicateCount = 0
+
+        for repository in repositories {
+            let workspace = repository.workspace.trimmingCharacters(in: .whitespacesAndNewlines)
+            let repoSlug = repository.repoSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !workspace.isEmpty, !repoSlug.isEmpty else { continue }
+
+            let composite = "\(workspace)/\(repoSlug)"
+            if monitoredRepos.contains(where: { $0.compositeSlug.caseInsensitiveCompare(composite) == .orderedSame }) {
+                duplicateCount += 1
+                continue
+            }
+
+            monitoredRepos.append(MonitoredRepository(workspace: workspace, repoSlug: repoSlug))
+            addedCount += 1
+        }
+
+        guard addedCount > 0 else {
+            if duplicateCount > 0 {
+                errorMessage = "Selected repositories are already monitored."
+            }
+            return
+        }
+
+        saveMonitoredReposToUserDefaults()
+        errorMessage = duplicateCount > 0 ? "Added \(addedCount) repositories. Skipped \(duplicateCount) already monitored." : nil
+        Task {
+            await refreshBuildStatuses()
+        }
+        print("AppState: Added \(addedCount) repositories from catalog.")
+    }
+
+    func loadAvailableWorkspaces() async throws -> [BitbucketWorkspace] {
+        guard let credentials else { throw BitbucketAPIError.missingCredentials }
+        return try await bitbucketService.fetchAccessibleWorkspaces(credentials: credentials)
+    }
+
+    func loadProjects(workspace: String) async throws -> [BitbucketProject] {
+        guard let credentials else { throw BitbucketAPIError.missingCredentials }
+        return try await bitbucketService.fetchProjects(workspace: workspace, credentials: credentials)
+    }
+
+    func loadRepositories(workspace: String) async throws -> [BitbucketRepositorySummary] {
+        guard let credentials else { throw BitbucketAPIError.missingCredentials }
+        return try await bitbucketService.fetchRepositories(workspace: workspace, credentials: credentials)
     }
 
     private func loadMonitoredReposFromUserDefaults() {

@@ -2,8 +2,10 @@ import Foundation
 import Security
 
 struct Credentials {
-    let username: String
-    let appPassword: String // Treat this like a token
+    let email: String
+    let apiToken: String
+
+    var displayAccount: String { email }
 }
 
 enum KeychainError: Error {
@@ -27,8 +29,8 @@ class KeychainService {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: credentials.username,
-            kSecValueData as String: credentials.appPassword.data(using: .utf8)!
+            kSecAttrAccount as String: credentials.email,
+            kSecValueData as String: credentials.apiToken.data(using: .utf8)!
             // Consider adding kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
 
@@ -43,8 +45,8 @@ class KeychainService {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecReturnAttributes as String: true, // Get account (username)
-            kSecReturnData as String: true,      // Get password data
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
@@ -59,14 +61,14 @@ class KeychainService {
         }
         guard let existingItem = item as? [String: Any],
               let passwordData = existingItem[kSecValueData as String] as? Data,
-              let username = existingItem[kSecAttrAccount as String] as? String,
-              let appPassword = String(data: passwordData, encoding: .utf8)
+              let email = existingItem[kSecAttrAccount as String] as? String,
+              let apiToken = String(data: passwordData, encoding: .utf8)
         else {
             throw KeychainError.dataConversionError
         }
 
         print("Keychain: Credentials loaded successfully.")
-        return Credentials(username: username, appPassword: appPassword)
+        return Credentials(email: email, apiToken: apiToken)
     }
 
     func deleteCredentials() throws {

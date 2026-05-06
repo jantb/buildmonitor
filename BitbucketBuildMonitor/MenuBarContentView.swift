@@ -2,12 +2,21 @@ import SwiftUI
 
 struct MenuBarContentView: View {
     @EnvironmentObject var appState: AppState
-    @Environment(\.openWindow) private var openWindow
+    let openSettings: () -> Void
+    let quit: () -> Void
+
+    init(openSettings: @escaping () -> Void = {}, quit: @escaping () -> Void = {}) {
+        self.openSettings = openSettings
+        self.quit = quit
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if appState.isAuthenticated {
                 menuHeader
+                StatusSummaryStrip(repos: appState.monitoredRepos)
+                    .padding(.horizontal)
+                    .padding(.bottom, 10)
 
                 if appState.isLoading && appState.monitoredRepos.isEmpty {
                     HStack {
@@ -49,25 +58,6 @@ struct MenuBarContentView: View {
 
                 Divider()
 
-                Button {
-                    Task {
-                        await appState.refreshBuildStatuses()
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Refresh Statuses")
-                        if appState.isLoading {
-                             Spacer() // Push spinner to the right
-                             ProgressView()
-                                .controlSize(.small)
-                                .padding(.leading, 5)
-                         }
-                    }
-                }
-                .disabled(appState.isLoading) // Disable while loading
-                .keyboardShortcut("r", modifiers: .command) // Example shortcut
-
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Bitbucket Build Monitor")
@@ -80,34 +70,25 @@ struct MenuBarContentView: View {
                 .padding()
             }
 
-            Divider()
-
-            Button {
-                openWindow(id: "settings-window")
-                NSApp.activate(ignoringOtherApps: true)
-            } label: {
-                Label("Settings...", systemImage: "gearshape")
-            }
-            .keyboardShortcut(",", modifiers: .command)
-
-            Divider()
-
-            Button("Quit BuildMonitor") {
-                NSApplication.shared.terminate(nil)
-            }
-            .keyboardShortcut("q", modifiers: .command)
-
+            footer
         }
-        .padding(.vertical, 8) // Add some padding around the content
-         // Set a min width if the List doesn't provide enough
-         .frame(minWidth: 320)
+        .padding(.vertical, 10)
+        .frame(width: 420)
     }
 
     private var menuHeader: some View {
         HStack(spacing: 10) {
-            Label("Bitbucket Builds", systemImage: aggregateStatus(repos: appState.monitoredRepos).symbolName)
-                .font(.headline)
-                .foregroundColor(aggregateStatus(repos: appState.monitoredRepos).color)
+            HStack(spacing: 8) {
+                StatusIconView(repos: appState.monitoredRepos)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Bitbucket Builds")
+                        .font(.headline)
+                    Text(statusSummaryText(repos: appState.monitoredRepos))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
 
             Spacer()
 
@@ -123,6 +104,49 @@ struct MenuBarContentView: View {
         .padding(.horizontal)
         .padding(.bottom, 8)
     }
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Button {
+                Task {
+                    await appState.refreshBuildStatuses()
+                }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .disabled(appState.isLoading)
+            .help("Refresh pipeline statuses")
+
+            if appState.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Spacer()
+
+            Button {
+                openSettings()
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Settings")
+
+            Button {
+                quit()
+            } label: {
+                Label("Quit", systemImage: "power")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Quit BuildMonitor")
+        }
+        .padding(.horizontal)
+        .padding(.top, 10)
+    }
 }
 
 // Row view for displaying a single repository in the menu list
@@ -132,10 +156,16 @@ struct RepositoryRow: View {
 
      var body: some View {
          HStack {
-             Image(systemName: repo.status.symbolName)
-                 .foregroundColor(repo.status.color)
-                 .font(.title3) // Slightly larger icon in the list
-                 .frame(width: 25) // Align icons
+             ZStack {
+                 if repo.status == .inProgress {
+                     RunningStatusGlyph(size: 22, lineWidth: 3)
+                 } else {
+                     Image(systemName: repo.status.symbolName)
+                         .foregroundColor(repo.status.color)
+                         .font(.title3)
+                 }
+             }
+             .frame(width: 25)
 
              VStack(alignment: .leading, spacing: 2) {
                  HStack(spacing: 6) {
@@ -149,6 +179,10 @@ struct RepositoryRow: View {
                          .padding(.horizontal, 6)
                          .padding(.vertical, 2)
                          .background(repo.status.color.opacity(0.12), in: Capsule())
+                         .overlay {
+                             Capsule()
+                                 .stroke(repo.status.color.opacity(0.25), lineWidth: 1)
+                         }
                  }
 
                  Text(repo.workspace)
@@ -200,5 +234,6 @@ struct RepositoryRow: View {
          }
          .padding(.horizontal)
          .padding(.vertical, 8)
+         .background(repo.status.color.opacity(0.05))
      }
 }

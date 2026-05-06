@@ -34,6 +34,47 @@ struct BitbucketPipelinesResponse: Codable {
     // Add next/previous links if handling pagination
 }
 
+struct BitbucketPaginatedResponse<Value: Codable>: Codable {
+    let values: [Value]?
+    let next: String?
+}
+
+struct BitbucketWorkspacePermission: Codable {
+    let workspace: BitbucketWorkspace
+}
+
+struct BitbucketWorkspace: Codable, Hashable, Identifiable {
+    let uuid: String?
+    let name: String?
+    let slug: String
+
+    var id: String { slug.lowercased() }
+    var displayName: String { name?.isEmpty == false ? name! : slug }
+}
+
+struct BitbucketProject: Codable, Hashable, Identifiable {
+    let uuid: String?
+    let key: String
+    let name: String?
+    let isPrivate: Bool?
+
+    var id: String { key.lowercased() }
+    var displayName: String { name?.isEmpty == false ? name! : key }
+}
+
+struct BitbucketRepositorySummary: Codable, Hashable, Identifiable {
+    let uuid: String?
+    let name: String?
+    let slug: String
+    let fullName: String?
+    let project: BitbucketProject?
+    let isPrivate: Bool?
+
+    var id: String { (fullName ?? slug).lowercased() }
+    var displayName: String { name?.isEmpty == false ? name! : slug }
+    var projectKey: String? { project?.key }
+}
+
 // Enum to represent unified build status
 enum BuildStatus: String, CaseIterable, Hashable {
     case unknown = "questionmark.circle" // SF Symbol name
@@ -47,7 +88,7 @@ enum BuildStatus: String, CaseIterable, Hashable {
         case .unknown: return .gray
         case .success: return .green
         case .failed: return .red
-        case .inProgress: return .blue
+        case .inProgress: return .yellow
         case .stopped: return .orange
         }
     }
