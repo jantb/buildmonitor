@@ -190,6 +190,13 @@ struct RepositoryRow: View {
                      .foregroundColor(.secondary)
                      .lineLimit(1)
 
+                 if let buildContextLabel = repo.buildContextLabel {
+                     Label(buildContextLabel, systemImage: "arrow.branch")
+                         .font(.caption2)
+                         .foregroundColor(.secondary)
+                         .lineLimit(1)
+                 }
+
                  if let statusMessage = repo.statusMessage {
                      Text(statusMessage)
                          .font(.caption2)

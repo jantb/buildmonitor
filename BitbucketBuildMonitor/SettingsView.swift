@@ -348,10 +348,17 @@ struct SettingsView: View {
                 Text("\(repo.workspace) / \(repo.repoSlug)")
                     .lineLimit(1)
 
-                Text(repo.statusMessage ?? repo.status.label)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(repo.statusMessage ?? repo.status.label)
+                        .lineLimit(1)
+
+                    if let buildContextLabel = repo.buildContextLabel {
+                        Label(buildContextLabel, systemImage: "arrow.branch")
+                            .lineLimit(1)
+                    }
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
 
             Spacer()

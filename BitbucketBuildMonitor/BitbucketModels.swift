@@ -14,15 +14,22 @@ struct BitbucketPipelineResult: Codable, Hashable {
     let type: String?
 }
 
+struct BitbucketPipelineTarget: Codable, Hashable {
+    let type: String?
+    let refType: String?
+    let refName: String?
+}
+
 // Simplified model for a Pipeline
 struct BitbucketPipeline: Codable, Hashable {
     let uuid: String?
     let state: BitbucketPipelineState?
+    let target: BitbucketPipelineTarget?
     let buildSecondsUsed: Int?
     let createdOn: String?
     let completedOn: String?
     let updatedOn: String?
-    // Add target, trigger, repository, etc. if needed
+    // Add trigger, repository, etc. if needed
 }
 
 // Response structure when fetching pipelines
@@ -104,6 +111,21 @@ enum BuildStatus: String, CaseIterable, Hashable {
     }
 }
 
+enum DeploymentEnvironment: String, Hashable {
+    case production = "Production"
+    case development = "Dev"
+    case test = "Test"
+
+    init?(branchName: String?) {
+        switch branchName?.lowercased() {
+        case "main": self = .production
+        case "development": self = .development
+        case "release/next": self = .test
+        default: return nil
+        }
+    }
+}
+
 // Structure to hold repository info and its status
 struct MonitoredRepository: Identifiable, Hashable {
     var id: String { compositeSlug.lowercased() }
@@ -111,10 +133,18 @@ struct MonitoredRepository: Identifiable, Hashable {
     let workspace: String
     let repoSlug: String
     var status: BuildStatus = .unknown
+    var branchName: String? = nil
     var lastBuildDate: Date? = nil
     var lastCheckedDate: Date? = nil
     var pipelineUrl: String? = nil // Optional URL to the specific pipeline run
     var statusMessage: String? = nil
 
     var compositeSlug: String { "\(workspace)/\(repoSlug)" }
+    var deploymentEnvironment: DeploymentEnvironment? { DeploymentEnvironment(branchName: branchName) }
+
+    var buildContextLabel: String? {
+        guard let branchName, !branchName.isEmpty else { return nil }
+        guard let deploymentEnvironment else { return branchName }
+        return "\(branchName) - \(deploymentEnvironment.rawValue)"
+    }
 }

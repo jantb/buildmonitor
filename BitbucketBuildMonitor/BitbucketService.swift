@@ -110,6 +110,7 @@ class BitbucketService {
 
             if let latestPipeline = pipelineResponse.values?.first {
                 updatedRepo.status = mapPipelineToStatus(pipeline: latestPipeline)
+                updatedRepo.branchName = latestPipeline.target?.refName
                 updatedRepo.lastBuildDate = pipelineDate(from: latestPipeline)
 
                 if let uuid = latestPipeline.uuid?.replacingOccurrences(of: "{", with: "").replacingOccurrences(of: "}", with: "") {
