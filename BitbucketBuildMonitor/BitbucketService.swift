@@ -188,7 +188,7 @@ class BitbucketService {
         components.queryItems = [
             URLQueryItem(name: "q", value: "target.ref_name = \"\(branchName)\""),
             URLQueryItem(name: "sort", value: "-created_on"),
-            URLQueryItem(name: "pagelen", value: "1")
+            URLQueryItem(name: "pagelen", value: "20")
         ]
 
         guard let url = components.url else {
@@ -201,7 +201,14 @@ class BitbucketService {
         decoder.keyDecodingStrategy = .convertFromSnakeCase // Bitbucket API uses snake_case
         let pipelineResponse = try decoder.decode(BitbucketPipelinesResponse.self, from: data)
 
-        return pipelineResponse.values?.first
+        return pipelineResponse.values?.first { pipeline in
+            pipelineMatchesBranch(pipeline, branchName: branchName)
+        }
+    }
+
+    private func pipelineMatchesBranch(_ pipeline: BitbucketPipeline, branchName: String) -> Bool {
+        guard let refName = pipeline.target?.refName else { return false }
+        return refName == branchName
     }
 
     private func aggregateStatus(from statuses: [BuildStatus]) -> BuildStatus {
