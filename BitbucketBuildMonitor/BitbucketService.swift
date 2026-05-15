@@ -73,7 +73,7 @@ class BitbucketService {
         .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
-    // Fetches the latest pipeline status for a given repo
+    // Fetches the latest pipeline status for a given repo's key branches.
     func fetchLatestBuildStatus(workspace: String, repoSlug: String, credentials: Credentials) async -> MonitoredRepository {
         var updatedRepo = MonitoredRepository(workspace: workspace, repoSlug: repoSlug)
         updatedRepo.lastCheckedDate = Date()
@@ -86,46 +86,264 @@ class BitbucketService {
             return updatedRepo
         }
 
-        // Endpoint for pipelines, sorted by creation date descending, limit 1
+        var branchStatuses: [BranchBuildStatus] = []
+
+        await withTaskGroup(of: BranchBuildStatus.self) { group in
+            for branch in KeyBuildBranch.all {
+                group.addTask {
+                    await self.fetchLatestBuildStatus(
+                        workspace: workspace,
+                        repoSlug: repoSlug,
+                        branch: branch,
+                        credentials: credentials
+                    )
+                }
+            }
+
+            for await branchStatus in group {
+                branchStatuses.append(branchStatus)
+            }
+        }
+
+        updatedRepo.branchStatuses = KeyBuildBranch.all.compactMap { branch in
+            branchStatuses.first { $0.branch == branch }
+        }
+        updatedRepo.status = aggregateStatus(from: updatedRepo.branchStatuses.map(\.status))
+
+        if let representativeStatus = representativeBranchStatus(from: updatedRepo.branchStatuses) {
+            updatedRepo.branchName = representativeStatus.branchName
+            updatedRepo.lastBuildDate = representativeStatus.lastBuildDate
+            updatedRepo.pipelineUrl = representativeStatus.pipelineUrl
+            updatedRepo.statusMessage = representativeStatus.statusMessage
+            updatedRepo.pipelineProgress = representativeStatus.pipelineProgress
+        }
+
+        let branchErrors = updatedRepo.branchStatuses.compactMap { branchStatus -> String? in
+            guard let statusMessage = branchStatus.statusMessage else { return nil }
+            return "\(branchStatus.branchName): \(statusMessage)"
+        }
+        if branchErrors.count == updatedRepo.branchStatuses.count, !branchErrors.isEmpty {
+            updatedRepo.statusMessage = branchErrors.joined(separator: "\n")
+        }
+
+        return updatedRepo
+    }
+
+    private func fetchLatestBuildStatus(
+        workspace: String,
+        repoSlug: String,
+        branch: KeyBuildBranch,
+        credentials: Credentials
+    ) async -> BranchBuildStatus {
+        var branchStatus = BranchBuildStatus(branch: branch)
+
+        let latestPipeline: BitbucketPipeline?
+        do {
+            latestPipeline = try await fetchLatestPipeline(
+                workspace: workspace,
+                repoSlug: repoSlug,
+                branchName: branch.name,
+                credentials: credentials
+            )
+        } catch {
+            branchStatus.statusMessage = "Refresh failed: \(error.localizedDescription)"
+            return branchStatus
+        }
+
+        guard let latestPipeline else {
+            branchStatus.statusMessage = "No pipelines found."
+            return branchStatus
+        }
+
+        branchStatus.status = mapPipelineToStatus(pipeline: latestPipeline)
+        branchStatus.lastBuildDate = pipelineDate(from: latestPipeline)
+        branchStatus.pipelineUrl = pipelineHTMLURL(
+            from: latestPipeline,
+            workspace: workspace,
+            repoSlug: repoSlug
+        )
+
+        if branchStatus.status == .inProgress, let pipelineUUID = latestPipeline.uuid {
+            branchStatus.pipelineProgress = try? await fetchPipelineProgress(
+                workspace: workspace,
+                repoSlug: repoSlug,
+                pipelineUUID: pipelineUUID,
+                credentials: credentials
+            )
+        }
+
+        return branchStatus
+    }
+
+    private func fetchLatestPipeline(
+        workspace: String,
+        repoSlug: String,
+        branchName: String,
+        credentials: Credentials
+    ) async throws -> BitbucketPipeline? {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("repositories/\(workspace)/\(repoSlug)/pipelines"),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [
+            URLQueryItem(name: "q", value: "target.ref_name = \"\(branchName)\""),
             URLQueryItem(name: "sort", value: "-created_on"),
-            URLQueryItem(name: "pagelen", value: "1") // Only need the latest
+            URLQueryItem(name: "pagelen", value: "1")
         ]
 
         guard let url = components.url else {
-            updatedRepo.statusMessage = BitbucketAPIError.invalidURL.localizedDescription
-            return updatedRepo
+            throw BitbucketAPIError.invalidURL
         }
 
-        do {
-            let data = try await fetchAuthenticatedData(url: url, credentials: credentials)
+        let data = try await fetchAuthenticatedData(url: url, credentials: credentials)
 
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase // Bitbucket API uses snake_case
-            let pipelineResponse = try decoder.decode(BitbucketPipelinesResponse.self, from: data)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase // Bitbucket API uses snake_case
+        let pipelineResponse = try decoder.decode(BitbucketPipelinesResponse.self, from: data)
 
-            if let latestPipeline = pipelineResponse.values?.first {
-                updatedRepo.status = mapPipelineToStatus(pipeline: latestPipeline)
-                updatedRepo.branchName = latestPipeline.target?.refName
-                updatedRepo.lastBuildDate = pipelineDate(from: latestPipeline)
+        return pipelineResponse.values?.first
+    }
 
-                if let uuid = latestPipeline.uuid?.replacingOccurrences(of: "{", with: "").replacingOccurrences(of: "}", with: "") {
-                    updatedRepo.pipelineUrl = "https://bitbucket.org/\(workspace)/\(repoSlug)/pipelines/results/\(uuid)"
-                }
-            } else {
-                updatedRepo.status = .unknown // No pipelines found
-                updatedRepo.statusMessage = "No pipelines found."
+    private func aggregateStatus(from statuses: [BuildStatus]) -> BuildStatus {
+        guard !statuses.isEmpty else { return .unknown }
+        if statuses.contains(.failed) { return .failed }
+        if statuses.contains(.inProgress) { return .inProgress }
+        if statuses.contains(.stopped) { return .stopped }
+        if statuses.allSatisfy({ $0 == .success }) { return .success }
+        if statuses.contains(.success), statuses.allSatisfy({ $0 == .success || $0 == .unknown }) {
+            return .success
+        }
+        return .unknown
+    }
+
+    private func representativeBranchStatus(from branches: [BranchBuildStatus]) -> BranchBuildStatus? {
+        for status in [BuildStatus.failed, .inProgress, .stopped, .unknown, .success] {
+            if let branchStatus = branches.first(where: { $0.status == status }) {
+                return branchStatus
             }
-            return updatedRepo
-
-        } catch {
-            updatedRepo.statusMessage = "Refresh failed: \(error.localizedDescription)"
-            return updatedRepo
         }
+        return branches.first
+    }
+
+    private func fetchPipelineProgress(
+        workspace: String,
+        repoSlug: String,
+        pipelineUUID: String,
+        credentials: Credentials
+    ) async throws -> PipelineProgress? {
+        let steps: [BitbucketPipelineStep] = try await fetchAllPages(
+            path: "repositories/\(workspace)/\(repoSlug)/pipelines/\(pipelineUUID)/steps",
+            queryItems: [
+                URLQueryItem(name: "pagelen", value: "100")
+            ],
+            credentials: credentials
+        )
+
+        return pipelineProgress(from: steps)
+    }
+
+    private func pipelineProgress(from steps: [BitbucketPipelineStep], now: Date = Date()) -> PipelineProgress? {
+        guard !steps.isEmpty else { return nil }
+
+        let completedStepCount = steps.filter(isCompletedStep).count
+        var completedUnits = Double(completedStepCount)
+
+        if let runningStep = steps.first(where: isRunningStep) {
+            completedUnits += estimatedProgressWithinRunningStep(
+                runningStep,
+                allSteps: steps,
+                now: now
+            )
+        }
+
+        let fraction = min(max(completedUnits / Double(steps.count), 0), 1)
+        return PipelineProgress(
+            completedStepCount: completedStepCount,
+            totalStepCount: steps.count,
+            fraction: fraction
+        )
+    }
+
+    private func estimatedProgressWithinRunningStep(
+        _ step: BitbucketPipelineStep,
+        allSteps: [BitbucketPipelineStep],
+        now: Date
+    ) -> Double {
+        guard
+            let startedOn = iso8601Date(from: step.startedOn)
+        else {
+            return 0.5
+        }
+
+        let elapsedSeconds = max(0, now.timeIntervalSince(startedOn))
+        let completedDurations = allSteps
+            .compactMap(stepDuration)
+            .filter { $0 > 0 }
+
+        guard let expectedSeconds = median(completedDurations), expectedSeconds > 0 else {
+            return 0.5
+        }
+
+        return min(max(elapsedSeconds / expectedSeconds, 0.05), 0.95)
+    }
+
+    private func stepDuration(_ step: BitbucketPipelineStep) -> TimeInterval? {
+        guard
+            let startedOn = iso8601Date(from: step.startedOn),
+            let completedOn = iso8601Date(from: step.completedOn)
+        else {
+            return nil
+        }
+
+        return completedOn.timeIntervalSince(startedOn)
+    }
+
+    private func isCompletedStep(_ step: BitbucketPipelineStep) -> Bool {
+        if step.completedOn != nil { return true }
+
+        let values = stepStateValues(step)
+        return values.contains(where: { value in
+            value.contains("complete")
+                || value.contains("successful")
+                || value.contains("failed")
+                || value.contains("error")
+                || value.contains("stopped")
+        })
+    }
+
+    private func isRunningStep(_ step: BitbucketPipelineStep) -> Bool {
+        guard !isCompletedStep(step) else { return false }
+
+        let values = stepStateValues(step)
+        return values.contains(where: { value in
+            value.contains("in_progress")
+                || value.contains("pending")
+                || value.contains("waiting")
+                || value.contains("building")
+                || value.contains("running")
+        })
+    }
+
+    private func stepStateValues(_ step: BitbucketPipelineStep) -> [String] {
+        normalizedValues(
+            step.state?.name,
+            step.state?.type,
+            step.state?.result?.name,
+            step.state?.result?.type
+        )
+    }
+
+    private func median(_ values: [TimeInterval]) -> TimeInterval? {
+        guard !values.isEmpty else { return nil }
+
+        let sortedValues = values.sorted()
+        let middleIndex = sortedValues.count / 2
+
+        if sortedValues.count.isMultiple(of: 2) {
+            return (sortedValues[middleIndex - 1] + sortedValues[middleIndex]) / 2
+        }
+
+        return sortedValues[middleIndex]
     }
 
     // Helper to map Bitbucket pipeline state/result to our BuildStatus enum
@@ -168,13 +386,36 @@ class BitbucketService {
     }
 
     private func pipelineDate(from pipeline: BitbucketPipeline) -> Date? {
-        let dateFormatter = ISO8601DateFormatter()
         for dateString in [pipeline.completedOn, pipeline.updatedOn, pipeline.createdOn] {
-            if let dateString, let date = dateFormatter.date(from: dateString) {
+            if let date = iso8601Date(from: dateString) {
                 return date
             }
         }
         return nil
+    }
+
+    private func pipelineHTMLURL(from pipeline: BitbucketPipeline, workspace: String, repoSlug: String) -> String? {
+        if let href = pipeline.links?.html?.href, !href.isEmpty {
+            return href
+        }
+
+        if let buildNumber = pipeline.buildNumber {
+            return "https://bitbucket.org/\(workspace)/\(repoSlug)/pipelines/results/\(buildNumber)"
+        }
+
+        return nil
+    }
+
+    private func iso8601Date(from dateString: String?) -> Date? {
+        guard let dateString else { return nil }
+
+        let dateFormatter = ISO8601DateFormatter()
+        if let date = dateFormatter.date(from: dateString) {
+            return date
+        }
+
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return dateFormatter.date(from: dateString)
     }
 
     private func fetchAllPages<Value: Codable>(

@@ -94,6 +94,85 @@ struct PipelineStatusPill: View {
     }
 }
 
+struct BranchBuildStatusStrip: View {
+    let branchStatuses: [BranchBuildStatus]
+    var openPipeline: (String) -> Void = { _ in }
+
+    private var statuses: [BranchBuildStatus] {
+        KeyBuildBranch.all.map { branch in
+            branchStatuses.first(where: { $0.branch == branch }) ?? BranchBuildStatus(branch: branch)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(statuses) { branchStatus in
+                BranchBuildStatusBadge(branchStatus: branchStatus) {
+                    if let pipelineUrl = branchStatus.pipelineUrl {
+                        openPipeline(pipelineUrl)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct BranchBuildStatusBadge: View {
+    let branchStatus: BranchBuildStatus
+    let openPipeline: () -> Void
+
+    var body: some View {
+        Button(action: openPipeline) {
+            HStack(spacing: 3) {
+                branchGlyph
+
+                statusGlyph
+            }
+            .frame(width: 34, height: 18)
+            .background(branchStatus.status.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(branchStatus.status.color.opacity(0.32), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .disabled(branchStatus.pipelineUrl == nil)
+        .help(helpText)
+    }
+
+    private var branchGlyph: some View {
+        Text(branchStatus.branch.shortLabel)
+            .font(.caption2)
+            .fontWeight(.bold)
+            .monospaced()
+            .foregroundColor(.primary.opacity(0.82))
+    }
+
+    @ViewBuilder
+    private var statusGlyph: some View {
+        if branchStatus.status == .inProgress {
+            RunningStatusGlyph(size: 9, lineWidth: 1.6)
+        } else {
+            Image(systemName: branchStatus.status.symbolName)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(branchStatus.status.color)
+        }
+    }
+
+    private var helpText: String {
+        var components = ["\(branchStatus.contextLabel): \(branchStatus.status.label)"]
+
+        if let statusMessage = branchStatus.statusMessage {
+            components.append(statusMessage)
+        } else if branchStatus.pipelineUrl != nil {
+            components.append("Open selected build")
+        }
+
+        return components.joined(separator: "\n")
+    }
+}
+
 struct StatusSummaryStrip: View {
     let repos: [MonitoredRepository]
 
@@ -121,7 +200,7 @@ extension BuildStatus {
 let statusPriority: [BuildStatus] = [.failed, .inProgress, .stopped, .unknown, .success]
 
 func statusCounts(from repos: [MonitoredRepository]) -> [BuildStatus: Int] {
-    Dictionary(grouping: repos, by: \.status)
+    Dictionary(grouping: repos.flatMap(\.statusItems), by: { $0 })
         .mapValues(\.count)
 }
 
@@ -138,12 +217,13 @@ func statusSummaryText(repos: [MonitoredRepository]) -> String {
 
 func aggregateStatus(repos: [MonitoredRepository]) -> BuildStatus {
     if repos.isEmpty { return .unknown }
-    if repos.contains(where: { $0.status == .failed }) { return .failed }
-    if repos.contains(where: { $0.status == .inProgress }) { return .inProgress }
-    if repos.contains(where: { $0.status == .stopped }) { return .stopped } // Show stopped before success
-    if repos.allSatisfy({ $0.status == .success }) { return .success } // Only show success if ALL are success
+    let statuses = repos.flatMap(\.statusItems)
+    if statuses.contains(.failed) { return .failed }
+    if statuses.contains(.inProgress) { return .inProgress }
+    if statuses.contains(.stopped) { return .stopped } // Show stopped before success
+    if statuses.allSatisfy({ $0 == .success }) { return .success } // Only show success if ALL are success
     // Check if all non-success are unknown (initial state)
-    if repos.allSatisfy({ $0.status == .success || $0.status == .unknown }) && repos.contains(where: {$0.status == .success }) {
+    if statuses.allSatisfy({ $0 == .success || $0 == .unknown }) && statuses.contains(.success) {
          return .success // Show success if some are success and others are just unknown
     }
     return .unknown // Default if mix of unknown/stopped/success or only unknown

@@ -32,8 +32,8 @@ struct MenuBarContentView: View {
                          .multilineTextAlignment(.center)
                          .padding()
                 } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
+                    PreservingScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
                             ForEach(appState.monitoredRepos) { repo in
                                 RepositoryRow(repo: repo)
                                 if repo.id != appState.monitoredRepos.last?.id {
@@ -190,12 +190,12 @@ struct RepositoryRow: View {
                      .foregroundColor(.secondary)
                      .lineLimit(1)
 
-                 if let buildContextLabel = repo.buildContextLabel {
-                     Label(buildContextLabel, systemImage: "arrow.branch")
-                         .font(.caption2)
-                         .foregroundColor(.secondary)
-                         .lineLimit(1)
+                 BranchBuildStatusStrip(branchStatuses: repo.branchStatuses) { pipelineUrl in
+                     if let url = URL(string: pipelineUrl) {
+                         openURL(url)
+                     }
                  }
+                 .padding(.top, 1)
 
                  if let statusMessage = repo.statusMessage {
                      Text(statusMessage)
@@ -210,6 +210,11 @@ struct RepositoryRow: View {
                      Text("Checked \(date, style: .relative) ago")
                          .font(.caption2)
                          .foregroundColor(.secondary)
+                 }
+
+                 if repo.status == .inProgress, let pipelineProgress = repo.pipelineProgress {
+                     PipelineProgressBar(progress: pipelineProgress, color: repo.status.color)
+                         .padding(.top, 2)
                  }
 
              }
@@ -243,4 +248,29 @@ struct RepositoryRow: View {
          .padding(.vertical, 8)
          .background(repo.status.color.opacity(0.05))
      }
+}
+
+struct PipelineProgressBar: View {
+    let progress: PipelineProgress
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ProgressView(value: progress.fraction)
+                .progressViewStyle(.linear)
+                .controlSize(.small)
+                .tint(color)
+
+            HStack(spacing: 6) {
+                Text("\(progress.percent)%")
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+
+                Text(progress.stepSummary)
+            }
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+        }
+    }
 }

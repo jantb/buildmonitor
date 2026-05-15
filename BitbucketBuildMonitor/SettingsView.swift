@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
+    @Environment(\.openURL) var openURL
 
     @State private var email: String = ""
     @State private var apiTokenInput: String = ""
@@ -352,9 +353,10 @@ struct SettingsView: View {
                     Text(repo.statusMessage ?? repo.status.label)
                         .lineLimit(1)
 
-                    if let buildContextLabel = repo.buildContextLabel {
-                        Label(buildContextLabel, systemImage: "arrow.branch")
-                            .lineLimit(1)
+                    BranchBuildStatusStrip(branchStatuses: repo.branchStatuses) { pipelineUrl in
+                        if let url = URL(string: pipelineUrl) {
+                            openURL(url)
+                        }
                     }
                 }
                 .font(.caption)

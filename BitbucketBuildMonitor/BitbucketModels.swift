@@ -20,16 +20,34 @@ struct BitbucketPipelineTarget: Codable, Hashable {
     let refName: String?
 }
 
+struct BitbucketLinks: Codable, Hashable {
+    let html: BitbucketLink?
+}
+
+struct BitbucketLink: Codable, Hashable {
+    let href: String?
+}
+
 // Simplified model for a Pipeline
 struct BitbucketPipeline: Codable, Hashable {
     let uuid: String?
+    let buildNumber: Int?
     let state: BitbucketPipelineState?
     let target: BitbucketPipelineTarget?
+    let links: BitbucketLinks?
     let buildSecondsUsed: Int?
     let createdOn: String?
     let completedOn: String?
     let updatedOn: String?
     // Add trigger, repository, etc. if needed
+}
+
+struct BitbucketPipelineStep: Codable, Hashable {
+    let uuid: String?
+    let name: String?
+    let state: BitbucketPipelineState?
+    let startedOn: String?
+    let completedOn: String?
 }
 
 // Response structure when fetching pipelines
@@ -39,6 +57,20 @@ struct BitbucketPipelinesResponse: Codable {
     let pagelen: Int?
     let size: Int?
     // Add next/previous links if handling pagination
+}
+
+struct PipelineProgress: Hashable {
+    let completedStepCount: Int
+    let totalStepCount: Int
+    let fraction: Double
+
+    var percent: Int {
+        Int((fraction * 100).rounded())
+    }
+
+    var stepSummary: String {
+        "\(completedStepCount)/\(totalStepCount) steps"
+    }
 }
 
 struct BitbucketPaginatedResponse<Value: Codable>: Codable {
@@ -119,10 +151,41 @@ enum DeploymentEnvironment: String, Hashable {
     init?(branchName: String?) {
         switch branchName?.lowercased() {
         case "main": self = .production
-        case "development": self = .development
+        case "develop", "development": self = .development
         case "release/next": self = .test
         default: return nil
         }
+    }
+}
+
+struct KeyBuildBranch: Identifiable, Hashable {
+    let name: String
+    let shortLabel: String
+
+    var id: String { name.lowercased() }
+
+    static let releaseNext = KeyBuildBranch(name: "release/next", shortLabel: "R")
+    static let develop = KeyBuildBranch(name: "develop", shortLabel: "D")
+    static let main = KeyBuildBranch(name: "main", shortLabel: "M")
+    static let all: [KeyBuildBranch] = [.releaseNext, .develop, .main]
+}
+
+struct BranchBuildStatus: Identifiable, Hashable {
+    let branch: KeyBuildBranch
+    var status: BuildStatus = .unknown
+    var lastBuildDate: Date? = nil
+    var pipelineUrl: String? = nil
+    var statusMessage: String? = nil
+    var pipelineProgress: PipelineProgress? = nil
+
+    var id: String { branch.id }
+    var branchName: String { branch.name }
+
+    var contextLabel: String {
+        guard let deploymentEnvironment = DeploymentEnvironment(branchName: branch.name) else {
+            return branch.name
+        }
+        return "\(branch.name) - \(deploymentEnvironment.rawValue)"
     }
 }
 
@@ -138,9 +201,14 @@ struct MonitoredRepository: Identifiable, Hashable {
     var lastCheckedDate: Date? = nil
     var pipelineUrl: String? = nil // Optional URL to the specific pipeline run
     var statusMessage: String? = nil
+    var pipelineProgress: PipelineProgress? = nil
+    var branchStatuses: [BranchBuildStatus] = KeyBuildBranch.all.map { BranchBuildStatus(branch: $0) }
 
     var compositeSlug: String { "\(workspace)/\(repoSlug)" }
     var deploymentEnvironment: DeploymentEnvironment? { DeploymentEnvironment(branchName: branchName) }
+    var statusItems: [BuildStatus] {
+        branchStatuses.isEmpty ? [status] : branchStatuses.map(\.status)
+    }
 
     var buildContextLabel: String? {
         guard let branchName, !branchName.isEmpty else { return nil }
