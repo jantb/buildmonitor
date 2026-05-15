@@ -105,71 +105,85 @@ struct BranchBuildStatusStrip: View {
     }
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(statuses) { branchStatus in
-                BranchBuildStatusBadge(branchStatus: branchStatus) {
-                    if let pipelineUrl = branchStatus.pipelineUrl {
-                        openPipeline(pipelineUrl)
-                    }
+        Button {
+            if let pipelineUrl = selectedPipelineURL {
+                openPipeline(pipelineUrl)
+            }
+        } label: {
+            HStack(spacing: 3) {
+                ForEach(statuses) { branchStatus in
+                    BranchStatusDot(branchStatus: branchStatus)
                 }
             }
-        }
-    }
-}
-
-private struct BranchBuildStatusBadge: View {
-    let branchStatus: BranchBuildStatus
-    let openPipeline: () -> Void
-
-    var body: some View {
-        Button(action: openPipeline) {
-            HStack(spacing: 3) {
-                branchGlyph
-
-                statusGlyph
-            }
-            .frame(width: 34, height: 18)
-            .background(branchStatus.status.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+            .padding(.horizontal, 5)
+            .frame(height: 19)
+            .background(aggregateStatus.color.opacity(0.1), in: Capsule())
             .overlay {
-                RoundedRectangle(cornerRadius: 5)
-                    .stroke(branchStatus.status.color.opacity(0.32), lineWidth: 1)
+                Capsule()
+                    .stroke(aggregateStatus.color.opacity(0.3), lineWidth: 1)
             }
-            .contentShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(branchStatus.pipelineUrl == nil)
+        .disabled(selectedPipelineURL == nil)
         .help(helpText)
     }
 
-    private var branchGlyph: some View {
-        Text(branchStatus.branch.shortLabel)
-            .font(.caption2)
-            .fontWeight(.bold)
-            .monospaced()
-            .foregroundColor(.primary.opacity(0.82))
+    private var aggregateStatus: BuildStatus {
+        let values = statuses.map(\.status)
+        if values.contains(.failed) { return .failed }
+        if values.contains(.inProgress) { return .inProgress }
+        if values.contains(.stopped) { return .stopped }
+        if values.allSatisfy({ $0 == .success }) { return .success }
+        if values.contains(.success), values.allSatisfy({ $0 == .success || $0 == .unknown }) {
+            return .success
+        }
+        return .unknown
     }
 
-    @ViewBuilder
-    private var statusGlyph: some View {
-        if branchStatus.status == .inProgress {
-            RunningStatusGlyph(size: 9, lineWidth: 1.6)
-        } else {
-            Image(systemName: branchStatus.status.symbolName)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(branchStatus.status.color)
+    private var selectedPipelineURL: String? {
+        for status in statusPriority {
+            if let branchStatus = statuses.first(where: { $0.status == status && $0.pipelineUrl != nil }) {
+                return branchStatus.pipelineUrl
+            }
         }
+        return nil
     }
 
     private var helpText: String {
-        var components = ["\(branchStatus.contextLabel): \(branchStatus.status.label)"]
-
-        if let statusMessage = branchStatus.statusMessage {
-            components.append(statusMessage)
-        } else if branchStatus.pipelineUrl != nil {
-            components.append("Open selected build")
+        var lines = statuses.map { branchStatus in
+            "\(branchStatus.contextLabel): \(branchStatus.status.label)"
         }
 
-        return components.joined(separator: "\n")
+        if selectedPipelineURL != nil {
+            lines.append("Open highest-priority branch build")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+}
+
+private struct BranchStatusDot: View {
+    let branchStatus: BranchBuildStatus
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(branchStatus.status.color.opacity(0.18))
+                .frame(width: 16, height: 16)
+                .overlay {
+                    Circle()
+                        .stroke(branchStatus.status.color.opacity(0.38), lineWidth: 1)
+                }
+
+            if branchStatus.status == .inProgress {
+                RunningStatusGlyph(size: 16, lineWidth: 1.7)
+            }
+
+            Text(branchStatus.branch.shortLabel)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(branchStatus.status.color)
+        }
     }
 }
 
