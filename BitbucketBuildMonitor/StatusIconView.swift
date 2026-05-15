@@ -200,7 +200,7 @@ extension BuildStatus {
 let statusPriority: [BuildStatus] = [.failed, .inProgress, .stopped, .unknown, .success]
 
 func statusCounts(from repos: [MonitoredRepository]) -> [BuildStatus: Int] {
-    Dictionary(grouping: repos.flatMap(\.statusItems), by: { $0 })
+    Dictionary(grouping: repos, by: \.status)
         .mapValues(\.count)
 }
 
@@ -217,13 +217,12 @@ func statusSummaryText(repos: [MonitoredRepository]) -> String {
 
 func aggregateStatus(repos: [MonitoredRepository]) -> BuildStatus {
     if repos.isEmpty { return .unknown }
-    let statuses = repos.flatMap(\.statusItems)
-    if statuses.contains(.failed) { return .failed }
-    if statuses.contains(.inProgress) { return .inProgress }
-    if statuses.contains(.stopped) { return .stopped } // Show stopped before success
-    if statuses.allSatisfy({ $0 == .success }) { return .success } // Only show success if ALL are success
+    if repos.contains(where: { $0.status == .failed }) { return .failed }
+    if repos.contains(where: { $0.status == .inProgress }) { return .inProgress }
+    if repos.contains(where: { $0.status == .stopped }) { return .stopped } // Show stopped before success
+    if repos.allSatisfy({ $0.status == .success }) { return .success } // Only show success if ALL are success
     // Check if all non-success are unknown (initial state)
-    if statuses.allSatisfy({ $0 == .success || $0 == .unknown }) && statuses.contains(.success) {
+    if repos.allSatisfy({ $0.status == .success || $0.status == .unknown }) && repos.contains(where: { $0.status == .success }) {
          return .success // Show success if some are success and others are just unknown
     }
     return .unknown // Default if mix of unknown/stopped/success or only unknown
